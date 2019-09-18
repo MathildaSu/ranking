@@ -416,7 +416,13 @@ def _make_model_fn(ranking_model, ranking_head):
   """
 
   def _model_fn(features, labels, mode, params, config):
+<<<<<<< Updated upstream
     """Defines an `Estimator` `model_fn`."""
+=======
+    """Defines an `Estimator` model_fn."""
+    if mode == tf.estimator.ModeKeys.PREDICT:
+      return tf.estimator.EstimatorSpec(mode=mode)
+>>>>>>> Stashed changes
     logits = ranking_model.compute_logits(features, labels, mode, params,
                                           config)
     return ranking_head.create_estimator_spec(

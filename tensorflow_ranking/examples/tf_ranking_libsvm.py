@@ -62,17 +62,20 @@ You can use TensorBoard to display the training results stored in $OUTPUT_DIR.
 """
 
 from absl import flags
-
+import os
 import numpy as np
 import six
 import tensorflow as tf
 import tensorflow_ranking as tfr
+from tensorflow.contrib import predictor
+import collections
 
 flags.DEFINE_string("train_path", None, "Input file path used for training.")
 flags.DEFINE_string("vali_path", None, "Input file path used for validation.")
 flags.DEFINE_string("test_path", None, "Input file path used for testing.")
 flags.DEFINE_string("output_dir", None, "Output directory for models.")
-
+flags.DEFINE_string("test", None, "If this is for testing only")
+flags.DEFINE_string("init_checkpoint", None, "initial checkpoint")
 flags.DEFINE_integer("train_batch_size", 32, "The batch size for training.")
 flags.DEFINE_integer("num_train_steps", 100000, "Number of steps for training.")
 
@@ -317,24 +320,41 @@ def get_eval_metric_fns():
   })
   return metric_fns
 
+def input_fn_pred(path):
+  train_dataset = tf.data.Dataset.from_generator(
+      tfr.data.libsvm_generator_test(path, FLAGS.num_features, FLAGS.list_size),
+      output_types=(
+          {str(k): tf.float32 for k in range(1,FLAGS.num_features+1)},
+          tf.float32
+      ),
+      output_shapes=(
+          {str(k): tf.TensorShape([FLAGS.list_size, 1])
+            for k in range(1,FLAGS.num_features+1)},
+          tf.TensorShape([FLAGS.list_size])
+      )
+  )
+  train_dataset = train_dataset.batch(1)
+  return train_dataset.make_one_shot_iterator().get_next()
+
+
 
 def train_and_eval():
   """Train and Evaluate."""
 
-  features, labels = load_libsvm_data(FLAGS.train_path, FLAGS.list_size)
-  train_input_fn, train_hook = get_train_inputs(features, labels,
-                                                FLAGS.train_batch_size)
+  # features, labels = load_libsvm_data(FLAGS.train_path, FLAGS.list_size)
+  # train_input_fn, train_hook = get_train_inputs(features, labels,
+  #                                               FLAGS.train_batch_size)
 
-  features_vali, labels_vali = load_libsvm_data(FLAGS.vali_path,
-                                                FLAGS.list_size)
-  vali_input_fn, vali_hook = get_eval_inputs(features_vali, labels_vali)
+  # features_vali, labels_vali = load_libsvm_data(FLAGS.vali_path,
+  #                                               FLAGS.list_size)
+  # vali_input_fn, vali_hook = get_eval_inputs(features_vali, labels_vali)
 
-  features_test, labels_test = load_libsvm_data(FLAGS.test_path,
-                                                FLAGS.list_size)
-  test_input_fn, test_hook = get_eval_inputs(features_test, labels_test)
+  # features_test, labels_test = load_libsvm_data(FLAGS.test_path,
+  #                                               FLAGS.list_size)
+  # test_input_fn, test_hook = get_eval_inputs(features_test, labels_test)
 
-  optimizer = tf.compat.v1.train.AdagradOptimizer(
-      learning_rate=FLAGS.learning_rate)
+  # optimizer = tf.compat.v1.train.AdagradOptimizer(
+  #     learning_rate=FLAGS.learning_rate)
 
   def _train_op_fn(loss):
     """Defines train op used in ranking head."""
@@ -358,34 +378,51 @@ def train_and_eval():
       config=tf.estimator.RunConfig(
           FLAGS.output_dir, save_checkpoints_steps=1000))
 
-  train_spec = tf.estimator.TrainSpec(
-      input_fn=train_input_fn,
-      hooks=[train_hook],
-      max_steps=FLAGS.num_train_steps)
-  # Export model to accept tf.Example when group_size = 1.
-  if FLAGS.group_size == 1:
-    vali_spec = tf.estimator.EvalSpec(
-        input_fn=vali_input_fn,
-        hooks=[vali_hook],
-        steps=1,
-        exporters=tf.estimator.LatestExporter(
-            "latest_exporter",
-            serving_input_receiver_fn=make_serving_input_fn()),
-        start_delay_secs=0,
-        throttle_secs=30)
-  else:
-    vali_spec = tf.estimator.EvalSpec(
-        input_fn=vali_input_fn,
-        hooks=[vali_hook],
-        steps=1,
-        start_delay_secs=0,
-        throttle_secs=30)
+  # train_spec = tf.estimator.TrainSpec(
+  #     input_fn=train_input_fn,
+  #     hooks=[train_hook],
+  #     max_steps=FLAGS.num_train_steps)
+  # # Export model to accept tf.Example when group_size = 1.
+  # if FLAGS.group_size == 1:
+  #   vali_spec = tf.estimator.EvalSpec(
+  #       input_fn=vali_input_fn,
+  #       hooks=[vali_hook],
+  #       steps=1,
+  #       exporters=tf.estimator.LatestExporter(
+  #           "latest_exporter",
+  #           serving_input_receiver_fn=make_serving_input_fn()),
+  #       start_delay_secs=0,
+  #       throttle_secs=30)
+  # else:
+  #   vali_spec = tf.estimator.EvalSpec(
+  #       input_fn=vali_input_fn,
+  #       hooks=[vali_hook],
+  #       steps=1,
+  #       start_delay_secs=0,
+  #       throttle_secs=30)
 
   # Train and validate
-  tf.estimator.train_and_evaluate(estimator, train_spec, vali_spec)
+  # tf.estimator.train_and_evaluate(estimator, train_spec, vali_spec)
 
   # Evaluate on the test data.
-  estimator.evaluate(input_fn=test_input_fn, hooks=[test_hook])
+  # estimator.evaluate(input_fn=test_input_fn, hooks=[test_hook])
+
+  result = estimator.predict(input_fn=lambda: input_fn_pred(FLAGS.test_path))
+  tf.logging.info('***** ***** ***** ***** ***** ***** ***** '+str(type(result)))
+  # tf.logging.info(next(result))
+  output_predict_file = os.path.join(FLAGS.output_dir, "test_results.tsv")
+  with tf.gfile.GFile(output_predict_file, "w") as writer:
+    num_written_lines = 0
+    tf.logging.info("***** Predict results *****")
+    for predict  in next(result):
+      # output_line = "\t".join(
+      #     str(class_probability)
+      #     for class_probability in probabilities) + "\n"
+      output_line = str(predict) + '\n'
+      writer.write(output_line)
+      num_written_lines += 1
+  # assert num_written_lines == num_actual_predict_examples
+
 
 
 def main(_):
@@ -399,5 +436,4 @@ if __name__ == "__main__":
   flags.mark_flag_as_required("vali_path")
   flags.mark_flag_as_required("test_path")
   flags.mark_flag_as_required("output_dir")
-
   tf.compat.v1.app.run()
